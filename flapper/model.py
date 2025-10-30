@@ -805,8 +805,12 @@ class MultiAgentTrainer(object):
                 data = pd.read_csv(csv_filename)
                 y = data['distance'].to_numpy() / (ic.u1 * ic.f1)
                 x = data['timestep'].to_numpy()
+                # Handle scalar-or-array initial conditions by selecting this agent's values
+                f2_i = ic.f2[agent_idx] if hasattr(ic.f2, '__len__') else ic.f2
+                A2_i = ic.A2[agent_idx] if hasattr(ic.A2, '__len__') else ic.A2
+                d_i = ic.distance[agent_idx] if hasattr(ic.distance, '__len__') else ic.distance
                 ax.plot(x, y, linewidth=1.5,
-                        label=f"$f_{agent_idx+1}/f_{0}$ {(ic.f2/ic.f1):.2f}, $A_{agent_idx+1}/A_{0}$ {(ic.A2/ic.A1):.2f}, d {ic.distance:.1f}")
+                        label=f"$f_{agent_idx+1}/f_{0}$ {(f2_i/ic.f1):.2f}, $A_{agent_idx+1}/A_{0}$ {(A2_i/ic.A1):.2f}, d {d_i:.1f}")
 
             ax.set_title(f'Agent {agent_idx+1}')
             ax.set_ylabel('Distance (d/$\\lambda_0$)')
@@ -978,7 +982,10 @@ class MultiAgentTrainer(object):
         else:
             if not os.path.exists("Figures/Policy Paths"):
                 os.makedirs("Figures/Policy Paths")
-            ic_str = f"d_{ic.distance:.1f}_f{idx+1}_{ic.f2:.1f}_A{idx+1}_{ic.A2:.1f}"
+            f2_i = ic.f2[idx] if hasattr(ic.f2, '__len__') else ic.f2
+            A2_i = ic.A2[idx] if hasattr(ic.A2, '__len__') else ic.A2
+            d_i = ic.distance[idx] if hasattr(ic.distance, '__len__') else ic.distance
+            ic_str = f"d_{d_i:.1f}_f{idx+1}_{f2_i:.1f}_A{idx+1}_{A2_i:.1f}"
             filename_base = f"Figures/Policy Paths/policy_path_agent_{idx+1}_N{self.n_agents}_{ic_str}"
         fig.savefig(f"{filename_base}.svg", format='svg')
         fig.savefig(f"{filename_base}.eps", format='eps')
@@ -988,7 +995,10 @@ class MultiAgentTrainer(object):
     def _get_data_filename_agent(self, ic, agent_idx):
         tag = 'passive' if self.env.passive else 'active'
         # Use 1-based AG id in filename
-        return f"All data/time_distance_N{self.n_agents}_AG_{agent_idx+1}_f{agent_idx+1}_{ic.f2:.2f}_A{agent_idx+1}_{ic.A2:.2f}_d_{ic.distance:.1f}_{tag}.csv"
+        f2_i = ic.f2[agent_idx] if hasattr(ic.f2, '__len__') else ic.f2
+        A2_i = ic.A2[agent_idx] if hasattr(ic.A2, '__len__') else ic.A2
+        d_i = ic.distance[agent_idx] if hasattr(ic.distance, '__len__') else ic.distance
+        return f"All data/time_distance_N{self.n_agents}_AG_{agent_idx+1}_f{agent_idx+1}_{f2_i:.2f}_A{agent_idx+1}_{A2_i:.2f}_d_{d_i:.1f}_{tag}.csv"
 
     def _run_one_agent(self, ic, agent_idx):
         distances = []
@@ -1039,9 +1049,11 @@ class MultiAgentTrainer(object):
                 data = pd.read_csv(csv_filename)
             # Normalize distance by leader wavelength like single-agent
             data['schooling_number'] = data['distance'] / (ic.u1 * ic.f1)
+            f2_i = ic.f2[idx] if hasattr(ic.f2, '__len__') else ic.f2
+            A2_i = ic.A2[idx] if hasattr(ic.A2, '__len__') else ic.A2
             ax.plot(
                 data['timestep'], data['schooling_number'],
-                label=f"Agent {idx+1}: $f_{idx+1}/f_{0}$ {(ic.f2/ic.f1):.2f}, $A_{idx+1}/A_{0}$ {(ic.A2/ic.A1):.2f}"
+                label=f"Agent {idx+1}: $f_{idx+1}/f_{0}$ {(f2_i/ic.f1):.2f}, $A_{idx+1}/A_{0}$ {(A2_i/ic.A1):.2f}"
             )
             self.env.passive = old_passive
 
@@ -1096,7 +1108,10 @@ class MultiAgentTrainer(object):
                     result = 2
                 else:
                     result = 0
-                rows.append({'f_i/f_0': ic.f2/ic.f1, 'A_i/A_0': ic.A2/ic.A1, 'd': ic.distance, 'Result': result})
+                f2_i = ic.f2[idx] if hasattr(ic.f2, '__len__') else ic.f2
+                A2_i = ic.A2[idx] if hasattr(ic.A2, '__len__') else ic.A2
+                d_i = ic.distance[idx] if hasattr(ic.distance, '__len__') else ic.distance
+                rows.append({'f_i/f_0': f2_i/ic.f1, 'A_i/A_0': A2_i/ic.A1, 'd': d_i, 'Result': result})
             self.env.passive = old_passive
 
             results = pd.DataFrame(rows, columns=['f_i/f_0', 'A_i/A_0', 'd', 'Result'])

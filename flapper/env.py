@@ -25,7 +25,8 @@ class InitialCondition(object):
 
     def __init__(self, distance=None, f2=None, A2=None, f1=None, A1=None, goal=None):
         # Leader is indexed as 0 (A0, f0). Keep backward-compatible kwargs f1/A1 (leader) and f2/A2 (follower default).
-        self.distance = distance if distance is not None else 21.5
+        # Accept scalar or per-agent arrays; store as-is (numpy will handle vector math downstream)
+        self.distance = 21.5 if distance is None else distance
         # Rename conceptually: leader -> index 0
         self.A1 = 2.0 if A1 is None else A1
         self.f1 = 1.0 if f1 is None else f1
@@ -35,9 +36,10 @@ class InitialCondition(object):
         self.goal = goal if goal is not None else 21.5
         self.u1 = numpy.pi * self.A1 * self.f1 * numpy.sqrt(2 * DEFAULT_CT / DEFAULT_CD)
 
-        self.u2 = numpy.pi * self.A2 * self.f2 * numpy.sqrt(2 * DEFAULT_CT / DEFAULT_CD)
-        self.v2 = -self.A2*(2 * numpy.pi * self.f2)
-        self.t_delay = -self.distance/self.u2
+        # Compute follower kinematics (scalar or element-wise if arrays were provided)
+        self.u2 = numpy.pi * numpy.asarray(self.A2) * numpy.asarray(self.f2) * numpy.sqrt(2 * DEFAULT_CT / DEFAULT_CD)
+        self.v2 = -numpy.asarray(self.A2) * (2 * numpy.pi * numpy.asarray(self.f2))
+        self.t_delay = -numpy.asarray(self.distance) / self.u2
         # Prevent overflow in exponential by clipping the argument
         exp_arg = numpy.clip(-self.t_delay/DEFAULT_T, -700, 700)
         self.v_flow = self.A1*self.f1*numpy.cos(2*numpy.pi*self.f1*(-self.t_delay))*numpy.exp(exp_arg)
@@ -379,19 +381,42 @@ class MultiSwimmerEnv(gym.Env):
         self.A1 = initial_condition.A1
         self.f1 = initial_condition.f1
 
-        # Followers initial parameters (all equal by default)
-        self.A_f = numpy.array([initial_condition.A2 for _ in range(self.n_followers)], dtype=float)
-        self.f_f = numpy.array([initial_condition.f2 for _ in range(self.n_followers)], dtype=float)
+        # Followers initial parameters: accept scalar (broadcast) or per-agent arrays
+        if hasattr(initial_condition.A2, '__len__'):
+            if len(initial_condition.A2) != self.n_followers:
+                raise ValueError(f"Length of A2 ({len(initial_condition.A2)}) must equal n_followers ({self.n_followers})")
+            self.A_f = numpy.asarray(initial_condition.A2, dtype=float)
+        else:
+            self.A_f = numpy.array([initial_condition.A2 for _ in range(self.n_followers)], dtype=float)
+
+        if hasattr(initial_condition.f2, '__len__'):
+            if len(initial_condition.f2) != self.n_followers:
+                raise ValueError(f"Length of f2 ({len(initial_condition.f2)}) must equal n_followers ({self.n_followers})")
+            self.f_f = numpy.asarray(initial_condition.f2, dtype=float)
+        else:
+            self.f_f = numpy.array([initial_condition.f2 for _ in range(self.n_followers)], dtype=float)
         self.goal = initial_condition.goal
 
-        # Initialize follower states along x behind leader with equal spacing = distance
-        base_distance = float(initial_condition.distance)
-        u_initial = float(initial_condition.u2)
-
-        self.flap = numpy.zeros((self.n_followers, 2), dtype=float)
-        for i in range(self.n_followers):
-            # Follower i starts at - (i+1) * distance
-            self.flap[i] = numpy.asarray([-(i+1) * base_distance, u_initial])
+        # Initialize follower states along x behind leader
+        # distance: scalar -> equal spacing; array -> per-pair spacing applied cumulatively (i vs predecessor)
+        if hasattr(initial_condition.distance, '__len__'):
+            if len(initial_condition.distance) != self.n_followers:
+                raise ValueError(f"Length of distance ({len(initial_condition.distance)}) must equal n_followers ({self.n_followers})")
+            d_arr = numpy.asarray(initial_condition.distance, dtype=float)
+            cum_d = numpy.cumsum(d_arr)
+            # Initial u per follower from their own A2,f2 if provided; else broadcast
+            u_init_arr = numpy.pi * self.A_f * self.f_f * numpy.sqrt(2 * self.Ct / self.Cd)
+            self.flap = numpy.zeros((self.n_followers, 2), dtype=float)
+            for i in range(self.n_followers):
+                self.flap[i] = numpy.asarray([-cum_d[i], u_init_arr[i]])
+        else:
+            base_distance = float(initial_condition.distance)
+            # Single follower default speed (broadcast)
+            u_initial = float(numpy.pi * self.A_f[0] * self.f_f[0] * numpy.sqrt(2 * self.Ct / self.Cd))
+            self.flap = numpy.zeros((self.n_followers, 2), dtype=float)
+            for i in range(self.n_followers):
+                # Follower i starts at - (i+1) * distance
+                self.flap[i] = numpy.asarray([-(i+1) * base_distance, u_initial])
 
         self.tt = 0.0
 
@@ -399,7 +424,14 @@ class MultiSwimmerEnv(gym.Env):
         self.flow_agreement_histories = [[] for _ in range(self.n_followers)]
         self.u_histories = [[] for _ in range(self.n_followers)]
         self.v_flow_histories = [[] for _ in range(self.n_followers)]
-        self.distance_histories = [[(i+1)*base_distance for _ in range(499)] for i in range(self.n_followers)]
+        if hasattr(initial_condition.distance, '__len__'):
+            # Seed with cumulative distances (consistent with equal-spacing seeding above)
+            d_arr = numpy.asarray(initial_condition.distance, dtype=float)
+            cum_d = numpy.cumsum(d_arr)
+            self.distance_histories = [[cum_d[i] for _ in range(499)] for i in range(self.n_followers)]
+        else:
+            base_distance = float(initial_condition.distance)
+            self.distance_histories = [[(i+1)*base_distance for _ in range(499)] for i in range(self.n_followers)]
         self.prev_v_flow = [0.0 for _ in range(self.n_followers)]
         self.prev_avg_flow_agreement = [0.0 for _ in range(self.n_followers)]
         self.prev_distance_from_average = [0.0 for _ in range(self.n_followers)]
@@ -409,7 +441,13 @@ class MultiSwimmerEnv(gym.Env):
         self.avg_v_flow = numpy.zeros(self.n_followers)
         self.avg_u = numpy.zeros(self.n_followers)
         self.v_f = numpy.zeros(self.n_followers)
-        self.distance = numpy.array([(i+1)*base_distance for i in range(self.n_followers)], dtype=float)
+        if hasattr(initial_condition.distance, '__len__'):
+            d_arr = numpy.asarray(initial_condition.distance, dtype=float)
+            cum_d = numpy.cumsum(d_arr)
+            self.distance = numpy.array([cum_d[i] for i in range(self.n_followers)], dtype=float)
+        else:
+            base_distance = float(initial_condition.distance)
+            self.distance = numpy.array([(i+1)*base_distance for i in range(self.n_followers)], dtype=float)
 
         # Observation histories
         self.obs_histories = [[] for _ in range(self.n_followers)]
